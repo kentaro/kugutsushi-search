@@ -94,3 +94,30 @@ kugutsushi-search/
 2. Google Cloudへの移行:
    - DockerイメージをGoogle Container Registry (GCR) にアップロード。
    - Google Cloud Runにデプロイしてスケーラブルな運用を実現。
+
+### **5.3. Dockerの実行方法**
+
+#### **5.3.1. イメージのビルド**
+```bash
+docker build -t kugutsushi-search .
+```
+
+#### **5.3.2. APIサーバーの起動**
+```bash
+# 重要: embeddingsディレクトリをマウントして起動
+docker run --rm -p 8000:8000 -v $(pwd)/embeddings:/app/embeddings kugutsushi-search
+```
+
+注意: ボリュームマウント（`-v`オプション）は必須です。マウントしないと、コンテナ停止時にインデックスデータが失われます。
+
+#### **5.3.3. CLIクライアントの使用**
+```bash
+# 依存関係のインストール
+pip install -r requirements-cli.txt
+
+# PDFのアップロード
+python -m src.cli upload path/to/document.pdf
+
+# テキスト検索
+python -m src.cli search "検索クエリ"
+```
