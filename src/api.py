@@ -5,6 +5,8 @@ import os
 import json
 import logging
 from pathlib import Path
+import io
+import faiss
 
 from src.embedder import Embedder
 from src.indexer import Indexer
@@ -40,6 +42,8 @@ processed_files = load_processed_files()
 class SearchResult(BaseModel):
     text: str
     score: float
+    file: str
+    page: int
 
 class SearchResponse(BaseModel):
     results: List[SearchResult]
@@ -79,22 +83,44 @@ async def upload_file(file: UploadFile = File(...)):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="PDFファイルのみアップロード可能です")
     
-    # 一時ファイルとして保存
-    temp_file = Path("embeddings") / file.filename
     try:
-        with open(temp_file, "wb") as f:
-            f.write(await file.read())
+        content = await file.read()
+        logger.info(f"ファイルを読み込み: {file.filename}")
         
         # PDFを処理
-        process_pdf(temp_file)
+        pdf_bytes = io.BytesIO(content)
+        logger.info("PDFの処理を開始")
+        texts = extract_from_pdf(pdf_bytes.getvalue())
+        logger.info(f"PDFの処理完了: {len(texts)}ページ")
         
-        return {"message": f"{file.filename}を処理しました"}
+        # ベクトルを生成
+        logger.info("ベクトルの生成を開始")
+        vectors = []
+        metadata = []
+        for text in texts:
+            vector = embedder.generate_embedding(text["text"])
+            vectors.append(vector)
+            metadata.append({
+                "text": text["text"],
+                "file": file.filename,
+                "page": text["page"] - 1  # 1-indexedから0-indexedに変換
+            })
+        logger.info(f"ベクトルの生成完了: {len(vectors)}件")
+        
+        # インデックスに追加
+        logger.info("インデックスに追加")
+        indexer.add(vectors, metadata)
+        indexer.save()
+        logger.info("インデックスの保存完了")
+        
+        # 処理済みファイルを記録
+        processed_files.add(file.filename)
+        save_processed_files(processed_files)
+        
+        return {"message": f"{file.filename}を処理しました", "texts_count": len(texts)}
     except Exception as e:
+        logger.error(f"アップロード処理でエラーが発生: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        # 一時ファイルを削除
-        if temp_file.exists():
-            temp_file.unlink()
 
 @app.post("/reindex")
 async def reindex():
@@ -133,7 +159,12 @@ async def search(query: str, top_k: Optional[int] = 3):
         
         # レスポンスを整形
         search_results = [
-            SearchResult(text=metadata["text"], score=float(score))
+            SearchResult(
+                text=metadata["text"],
+                score=float(score),
+                file=metadata["file"],
+                page=metadata["page"]
+            )
             for metadata, score in results
         ]
         

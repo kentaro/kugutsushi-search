@@ -29,14 +29,12 @@ class Indexer:
             self.index = faiss.IndexFlatIP(self.dimension)
             self.metadata: List[Dict] = []
 
-    def normalize_vectors(self, vectors: np.ndarray) -> np.ndarray:
-        """ベクトルをL2正規化"""
-        # 2次元配列でない場合は2次元に変換
+    def normalize_vectors(self, vectors):
+        """ベクトルを正規化します"""
+        vectors = np.array(vectors)
         if vectors.ndim == 1:
             vectors = vectors.reshape(1, -1)
-        # L2正規化
-        faiss.normalize_L2(vectors)
-        return vectors
+        return vectors / np.linalg.norm(vectors, axis=1)[:, np.newaxis]
 
     def add(self, vectors: np.ndarray, metadata_list: List[Dict]) -> None:
         """ベクトルとメタデータをインデックスに追加"""

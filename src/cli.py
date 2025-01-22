@@ -10,9 +10,49 @@ def print_search_results(results: List[dict]) -> None:
     """検索結果を表示"""
     for result in results:
         print("-" * 80)
+        print(f"書籍: {Path(result['file']).name}")
+        print(f"ページ: {result['page'] + 1}")  # 0-indexedを1-indexedに変換
         print(f"スコア: {result['score']:.3f}")
         print(f"テキスト: {result['text']}")
         print()
+
+def upload_pdf_files(files: List[Path]) -> None:
+    """PDFファイルをアップロードして処理します。"""
+    if not files:
+        click.echo("PDFファイルが見つかりません。", err=True)
+        return
+        
+    click.echo(f"{len(files)}個のPDFファイルを処理します...")
+    
+    processed = 0
+    skipped = 0
+    for pdf_file in files:
+        try:
+            with open(pdf_file, 'rb') as f:
+                files = {'file': (pdf_file.name, f, 'application/pdf')}
+                response = requests.post(f"{API_BASE_URL}/upload", files=files)
+                response.raise_for_status()
+                
+            result = response.json()
+            if result.get("skipped", False):
+                skipped += 1
+                click.echo(f"スキップ: {pdf_file.name} (既に処理済み)")
+            else:
+                processed += 1
+                click.echo(f"処理完了: {pdf_file.name} ({result['texts_count']}件のテキストを追加)")
+                
+        except requests.exceptions.RequestException as e:
+            error_detail = ""
+            if hasattr(e.response, 'json'):
+                error_json = e.response.json()
+                error_detail = f"\nエラー詳細: {error_json.get('detail', '')}"
+                if 'traceback' in error_json:
+                    error_detail += f"\n\nスタックトレース:\n{error_json['traceback']}"
+            click.echo(f"エラー: {pdf_file.name} ({str(e)}){error_detail}", err=True)
+        except Exception as e:
+            click.echo(f"エラー: {pdf_file.name} ({str(e)})", err=True)
+            
+    click.echo(f"\n処理完了: {processed}個のファイルを処理、{skipped}個のファイルをスキップしました。")
 
 @click.group()
 def cli():
@@ -60,35 +100,8 @@ def upload(path: str, recursive: bool):
         else:
             pattern = '**/*.pdf' if recursive else '*.pdf'
             files = sorted(path.glob(pattern))
-            
-        total_files = len(list(files))
-        if total_files == 0:
-            click.echo("PDFファイルが見つかりません。", err=True)
-            return
-            
-        click.echo(f"{total_files}個のPDFファイルを処理します...")
         
-        processed = 0
-        skipped = 0
-        for pdf_file in files:
-            try:
-                with open(pdf_file, 'rb') as f:
-                    files = {'file': (pdf_file.name, f, 'application/pdf')}
-                    response = requests.post(f"{API_BASE_URL}/upload", files=files)
-                    response.raise_for_status()
-                    
-                result = response.json()
-                if result.get("skipped", False):
-                    skipped += 1
-                    click.echo(f"スキップ: {pdf_file.name} (既に処理済み)")
-                else:
-                    processed += 1
-                    click.echo(f"処理完了: {pdf_file.name} ({result['texts_count']}件のテキストを追加)")
-                    
-            except Exception as e:
-                click.echo(f"エラー: {pdf_file.name} ({str(e)})", err=True)
-                
-        click.echo(f"\n処理完了: {processed}個のファイルを処理、{skipped}個のファイルをスキップしました。")
+        upload_pdf_files(files)
         
     except requests.exceptions.RequestException as e:
         click.echo(f"APIリクエストエラー: {str(e)}", err=True)
@@ -101,7 +114,7 @@ def reindex():
     try:
         response = requests.post(f"{API_BASE_URL}/reindex")
         response.raise_for_status()
-        print(response.json()["message"])
+        click.echo("インデックスの再構築が完了しました")
     except requests.exceptions.RequestException as e:
         print(f"エラー: {e}")
         if hasattr(e.response, 'json'):

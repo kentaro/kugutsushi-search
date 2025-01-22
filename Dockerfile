@@ -18,7 +18,7 @@ COPY . .
 
 # embeddingsディレクトリを作成
 RUN mkdir -p embeddings/.cache
-ENV TRANSFORMERS_CACHE=/app/embeddings/.cache
+ENV HF_HOME=/app/.cache/huggingface
 
 # ポートを公開
 EXPOSE 8000
