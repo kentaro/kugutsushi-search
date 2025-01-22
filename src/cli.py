@@ -1,10 +1,18 @@
 import click
 import requests
 import os
-from typing import Optional
+from typing import Optional, List
 from pathlib import Path
 
 API_BASE_URL = "http://localhost:8000"
+
+def print_search_results(results: List[dict]) -> None:
+    """検索結果を表示"""
+    for result in results:
+        print("-" * 80)
+        print(f"スコア: {result['score']:.3f}")
+        print(f"テキスト: {result['text']}")
+        print()
 
 @click.group()
 def cli():
@@ -27,12 +35,8 @@ def search(query: str, top_k: int):
         
         results = response.json()["results"]
         
-        # 結果を表示
-        click.echo(f"\n検索クエリ: {query}\n")
-        for result in results:
-            click.echo(f"スコア: {result['score']:.4f}")
-            click.echo(f"テキスト: {result['text']}\n")
-            
+        print_search_results(results)
+        
     except requests.exceptions.RequestException as e:
         click.echo(f"APIリクエストエラー: {str(e)}", err=True)
     except Exception as e:
@@ -90,6 +94,18 @@ def upload(path: str, recursive: bool):
         click.echo(f"APIリクエストエラー: {str(e)}", err=True)
     except Exception as e:
         click.echo(f"エラーが発生しました: {str(e)}", err=True)
+
+@cli.command()
+def reindex():
+    """インデックスを再構築"""
+    try:
+        response = requests.post(f"{API_BASE_URL}/reindex")
+        response.raise_for_status()
+        print(response.json()["message"])
+    except requests.exceptions.RequestException as e:
+        print(f"エラー: {e}")
+        if hasattr(e.response, 'json'):
+            print(e.response.json()["detail"])
 
 if __name__ == '__main__':
     cli() 

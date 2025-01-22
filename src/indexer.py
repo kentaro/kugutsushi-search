@@ -29,12 +29,23 @@ class Indexer:
             self.index = faiss.IndexFlatIP(self.dimension)
             self.metadata: List[Dict] = []
 
+    def normalize_vectors(self, vectors: np.ndarray) -> np.ndarray:
+        """ベクトルをL2正規化"""
+        # 2次元配列でない場合は2次元に変換
+        if vectors.ndim == 1:
+            vectors = vectors.reshape(1, -1)
+        # L2正規化
+        faiss.normalize_L2(vectors)
+        return vectors
+
     def add(self, vectors: np.ndarray, metadata_list: List[Dict]) -> None:
         """ベクトルとメタデータをインデックスに追加"""
         if len(vectors) != len(metadata_list):
             raise ValueError("vectors and metadata_list must have the same length")
         
-        self.index.add(vectors)
+        # ベクトルを正規化してから追加
+        normalized_vectors = self.normalize_vectors(vectors)
+        self.index.add(normalized_vectors)
         self.metadata.extend(metadata_list)
 
     def search(self, query_vector: np.ndarray, top_k: int = 5) -> List[Tuple[Dict, float]]:
@@ -48,12 +59,11 @@ class Indexer:
         Returns:
             [(メタデータ, スコア), ...]のリスト
         """
-        # query_vectorが2次元でない場合は2次元に変換
-        if query_vector.ndim == 1:
-            query_vector = query_vector.reshape(1, -1)
+        # クエリベクトルを正規化
+        normalized_query = self.normalize_vectors(query_vector)
 
         # 検索実行
-        scores, indices = self.index.search(query_vector, top_k)
+        scores, indices = self.index.search(normalized_query, top_k)
         
         # 結果を整形
         results = []

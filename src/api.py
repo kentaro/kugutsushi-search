@@ -4,6 +4,7 @@ from typing import List, Optional
 import os
 import json
 import logging
+from pathlib import Path
 
 from src.embedder import Embedder
 from src.indexer import Indexer
@@ -43,45 +44,78 @@ class SearchResult(BaseModel):
 class SearchResponse(BaseModel):
     results: List[SearchResult]
 
+def process_pdf(file_path: str, force: bool = False) -> None:
+    processed_files = load_processed_files()
+    
+    if not force and str(file_path) in processed_files:
+        return
+    
+    # PDFからテキストを抽出
+    texts = extract_from_pdf(file_path)
+    
+    # ベクトルを生成
+    vectors = []
+    metadata = []
+    for page, text in enumerate(texts):
+        vector = embedder.generate_embedding(text)
+        vectors.append(vector)
+        metadata.append({
+            "text": text,
+            "file": str(file_path),
+            "page": page
+        })
+    
+    # インデックスに追加
+    indexer.add(vectors, metadata)
+    indexer.save()
+    
+    # 処理済みファイルを記録
+    if not force:
+        processed_files.add(str(file_path))
+        save_processed_files(processed_files)
+
 @app.post("/upload")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...)):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="PDFファイルのみアップロード可能です")
     
+    # 一時ファイルとして保存
+    temp_file = Path("embeddings") / file.filename
     try:
-        logger.info(f"PDFファイルを処理開始: {file.filename}")
+        with open(temp_file, "wb") as f:
+            f.write(await file.read())
         
-        # 既に処理済みのファイルはスキップ
-        if file.filename in processed_files:
-            logger.info(f"ファイルはすでに処理済み: {file.filename}")
-            return {"message": f"{file.filename}は既に処理済みです", "texts_count": 0, "skipped": True}
+        # PDFを処理
+        process_pdf(temp_file)
         
-        # PDFからテキストを抽出
-        content = await file.read()
-        logger.info(f"PDFファイルを読み込み: {len(content)} bytes")
-        
-        texts = extract_from_pdf(content)
-        logger.info(f"テキスト抽出完了: {len(texts)}件")
-        
-        # テキストをベクトル化してインデックスに追加
-        vectors = embedder.generate_embeddings(texts)
-        logger.info(f"ベクトル生成完了: {len(vectors)}件")
-        
-        indexer.add(vectors, texts)
-        logger.info("インデックスに追加完了")
-        
-        # インデックスを保存
-        indexer.save()
-        logger.info("インデックスを保存完了")
-        
-        # 処理済みファイルとして記録
-        processed_files.add(file.filename)
-        save_processed_files(processed_files)
-        logger.info("処理済みファイルを記録完了")
-        
-        return {"message": f"{file.filename}を正常に処理しました", "texts_count": len(texts), "skipped": False}
+        return {"message": f"{file.filename}を処理しました"}
     except Exception as e:
-        logger.error(f"エラーが発生: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # 一時ファイルを削除
+        if temp_file.exists():
+            temp_file.unlink()
+
+@app.post("/reindex")
+async def reindex():
+    """既存のインデックスを再構築します。"""
+    try:
+        # 処理済みファイルのリストを取得
+        processed_files = load_processed_files()
+        if not processed_files:
+            raise HTTPException(status_code=404, detail="処理済みのファイルが見つかりません")
+        
+        # インデックスを初期化
+        indexer.index = faiss.IndexFlatIP(indexer.dimension)
+        indexer.metadata = []
+        
+        # 各ファイルを再処理
+        for file_path in processed_files:
+            if Path(file_path).exists():
+                process_pdf(file_path, force=True)
+            
+        return {"message": f"{len(processed_files)}個のファイルを再インデックスしました"}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/search", response_model=SearchResponse)
