@@ -33,4 +33,5 @@ ENV/
 # Project specific
 embeddings/
 *.faiss
-docs/*.pdf
+docs/
+
