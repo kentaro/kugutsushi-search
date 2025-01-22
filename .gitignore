@@ -31,7 +31,7 @@ ENV/
 *.swo
 
 # Project specific
-embeddings/
-*.faiss
+embeddings/*.faiss
+embeddings/*.json
 docs/
-
+.local/

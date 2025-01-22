@@ -25,6 +25,7 @@ indexer = Indexer()
 
 # 処理済みファイルを管理
 PROCESSED_FILES_PATH = "embeddings/processed_files.json"
+DEFAULT_INDEX_PATH = "embeddings/default.json"
 os.makedirs("embeddings", exist_ok=True)
 
 def load_processed_files():
@@ -78,46 +79,59 @@ def process_pdf(file_path: str, force: bool = False) -> None:
         processed_files.add(str(file_path))
         save_processed_files(processed_files)
 
+def process_pdf_content(content: bytes, filename: str) -> int:
+    """PDFの内容を処理してインデックスに追加する"""
+    logger.info(f"ファイルを処理: {filename}")
+    
+    # PDFを処理
+    pdf_bytes = io.BytesIO(content)
+    logger.info("PDFの処理を開始")
+    texts = extract_from_pdf(pdf_bytes.getvalue())
+    logger.info(f"PDFの処理完了: {len(texts)}ページ")
+    
+    # ベクトルを生成
+    logger.info("ベクトルの生成を開始")
+    vectors = []
+    metadata = []
+    for text in texts:
+        vector = embedder.generate_embedding(text["text"])
+        vectors.append(vector)
+        metadata.append({
+            "text": text["text"],
+            "file": filename,
+            "page": text["page"] - 1
+        })
+    logger.info(f"ベクトルの生成完了: {len(vectors)}件")
+    
+    # インデックスに追加
+    logger.info("インデックスに追加")
+    indexer.add(vectors, metadata)
+    indexer.save()
+    logger.info("インデックスの保存完了")
+    
+    return len(texts)
+
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="PDFファイルのみアップロード可能です")
     
+    # 既に処理済みのファイルかチェック
+    if file.filename in processed_files:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"{file.filename}は既に処理済みです"
+        )
+    
     try:
         content = await file.read()
-        logger.info(f"ファイルを読み込み: {file.filename}")
-        
-        # PDFを処理
-        pdf_bytes = io.BytesIO(content)
-        logger.info("PDFの処理を開始")
-        texts = extract_from_pdf(pdf_bytes.getvalue())
-        logger.info(f"PDFの処理完了: {len(texts)}ページ")
-        
-        # ベクトルを生成
-        logger.info("ベクトルの生成を開始")
-        vectors = []
-        metadata = []
-        for text in texts:
-            vector = embedder.generate_embedding(text["text"])
-            vectors.append(vector)
-            metadata.append({
-                "text": text["text"],
-                "file": file.filename,
-                "page": text["page"] - 1  # 1-indexedから0-indexedに変換
-            })
-        logger.info(f"ベクトルの生成完了: {len(vectors)}件")
-        
-        # インデックスに追加
-        logger.info("インデックスに追加")
-        indexer.add(vectors, metadata)
-        indexer.save()
-        logger.info("インデックスの保存完了")
+        texts_count = process_pdf_content(content, file.filename)
         
         # 処理済みファイルを記録
         processed_files.add(file.filename)
         save_processed_files(processed_files)
         
-        return {"message": f"{file.filename}を処理しました", "texts_count": len(texts)}
+        return {"message": f"{file.filename}を処理しました", "texts_count": texts_count}
     except Exception as e:
         logger.error(f"アップロード処理でエラーが発生: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -131,16 +145,30 @@ async def reindex():
         if not processed_files:
             raise HTTPException(status_code=404, detail="処理済みのファイルが見つかりません")
         
-        # インデックスを初期化
+        # インデックスとprocessed_filesを初期化
         indexer.index = faiss.IndexFlatIP(indexer.dimension)
         indexer.metadata = []
         
+        # 関連ファイルを初期化
+        processed_files.clear()
+        save_processed_files(processed_files)
+        if Path(DEFAULT_INDEX_PATH).exists():
+            Path(DEFAULT_INDEX_PATH).unlink()
+        
+        total_processed = 0
         # 各ファイルを再処理
-        for file_path in processed_files:
-            if Path(file_path).exists():
-                process_pdf(file_path, force=True)
-            
-        return {"message": f"{len(processed_files)}個のファイルを再インデックスしました"}
+        for file_path in list(processed_files):
+            path = Path(file_path)
+            if path.exists():
+                with open(path, 'rb') as f:
+                    content = f.read()
+                    process_pdf_content(content, file_path)
+                    processed_files.add(file_path)
+                    total_processed += 1
+        
+        # 処理済みファイルを保存
+        save_processed_files(processed_files)
+        return {"message": f"{total_processed}個のファイルを再インデックスしました"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
