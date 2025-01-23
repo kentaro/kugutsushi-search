@@ -20,15 +20,17 @@ class Indexer:
         # 訓練に必要なデータ数（nlist * 39）
         self.min_training_size = self.nlist * 39
         
-        # 訓練前用の一時的なインデックス
-        self.temp_index = faiss.IndexFlatIP(dimension)
-        
-        # 本番用のインデックス（訓練後に初期化）
-        self.index = None
-        self.is_trained = False
+        # 初期状態では一時インデックスを使用
+        self._init_temp_index()
         
         # メタデータをSQLiteで管理
         self.db = Database()
+    
+    def _init_temp_index(self):
+        """一時インデックスの初期化"""
+        self.temp_index = faiss.IndexFlatIP(self.dimension)
+        self.index = None
+        self.is_trained = False
     
     def _init_ivf_pq(self, vectors: np.ndarray):
         """IVF-PQインデックスの初期化と訓練"""
@@ -45,6 +47,8 @@ class Indexer:
         # 訓練済みデータの追加
         self.index.add(vectors)
         self.is_trained = True
+        # 一時インデックスのクリア
+        self.temp_index = None
         logger.info("IVF-PQインデックスの訓練が完了")
     
     def normalize_vectors(self, vectors: np.ndarray) -> np.ndarray:
@@ -83,8 +87,6 @@ class Indexer:
             self.temp_index.reconstruct_n(0, total_vectors, all_vectors)
             # IVF-PQの初期化と訓練
             self._init_ivf_pq(all_vectors)
-            # 一時インデックスのクリア
-            self.temp_index = None
     
     def search(self, query_vector: np.ndarray, top_k: int = 3) -> list:
         """ベクトル検索を実行"""
@@ -153,6 +155,7 @@ class Indexer:
         
         if not vector_path.exists():
             logger.warning("インデックスファイルが見つかりません")
+            self._init_temp_index()  # 一時インデックスを初期化
             return
         
         # 圧縮されたベクトルを読み込んでインデックスを再構築
@@ -161,14 +164,11 @@ class Indexer:
             if len(vectors) >= self.min_training_size:
                 # 十分なデータがある場合はIVF-PQで初期化
                 self._init_ivf_pq(vectors)
-                self.temp_index = None
             else:
                 # データが少ない場合は一時インデックスとして保存
-                self.temp_index = faiss.IndexFlatIP(self.dimension)
+                self._init_temp_index()
                 if len(vectors) > 0:
                     self.temp_index.add(vectors)
-                self.index = None
-                self.is_trained = False
         
         # サイズ情報をログ出力
         vector_size = os.path.getsize(vector_path) / (1024 * 1024)  # MB単位
