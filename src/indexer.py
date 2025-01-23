@@ -39,6 +39,10 @@ class Indexer:
         self.metadata.extend(metadata)
     
     def search(self, query_vector: np.ndarray, top_k: int = 3) -> list:
+        if self.index.ntotal == 0:
+            logger.warning("インデックスが空です")
+            return []
+
         if isinstance(query_vector, list):
             query_vector = np.array(query_vector, dtype=np.float32)
         elif len(query_vector.shape) == 1:

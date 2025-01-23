@@ -25,6 +25,7 @@ EMBEDDINGS_DIR.mkdir(exist_ok=True)
 logger.info("モデルのロードを開始")
 embedder = Embedder()
 indexer = Indexer()
+indexer.load()  # 保存されているインデックスを読み込む
 logger.info("モデルのロードが完了")
 
 # FastAPIアプリケーション
