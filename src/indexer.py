@@ -10,9 +10,24 @@ import numpy.lib.format as npy_format
 logger = logging.getLogger(__name__)
 
 class Indexer:
-    def __init__(self, dimension: int = 1024):  # static-embedding-japaneseは1024次元
+    def __init__(self, dimension: int = 128):  # truncate_dimで128次元に削減
         self.dimension = dimension
-        self.index = faiss.IndexFlatIP(dimension)  # 内積で類似度を計算
+        # IVF-PQの設定
+        # nlist: クラスタ数（通常、データ数の平方根程度）
+        # ncentroids: サブクラスタ数（通常8または16）
+        # nbits_per_idx: 各サブベクトルのビット数（通常8）
+        nlist = 100  # クラスタ数（データ量に応じて調整）
+        m = 16  # サブベクトルの数（dimension を 8 で割り切れる数）
+        nbits = 8  # 各サブベクトルのビット数
+        
+        # 量子化器の作成
+        quantizer = faiss.IndexFlatIP(dimension)
+        # IVF-PQインデックスの作成
+        self.index = faiss.IndexIVFPQ(quantizer, dimension, nlist, m, nbits)
+        # 内積で類似度を計算するように設定
+        self.index.metric_type = faiss.METRIC_INNER_PRODUCT
+        # 訓練前はaddできないのでis_trainedフラグを追加
+        self.is_trained = False
         self.metadata = []
     
     def normalize_vectors(self, vectors: np.ndarray) -> np.ndarray:
@@ -34,8 +49,22 @@ class Indexer:
             vectors = np.array(vectors, dtype=np.float32)
         
         # L2正規化を適用
-        normalized_vectors = self.normalize_vectors(vectors.copy())  # 元の配列を変更しないようにコピー
-        self.index.add(normalized_vectors)
+        normalized_vectors = self.normalize_vectors(vectors.copy())
+        
+        # インデックスが未訓練の場合は訓練を実行
+        if not self.is_trained:
+            if len(normalized_vectors) < 100:  # 訓練データが少なすぎる場合
+                logger.warning("訓練データが少なすぎます。一時的にFlatIPインデックスを使用します。")
+                self.index = faiss.IndexFlatIP(self.dimension)
+                self.index.add(normalized_vectors)
+            else:
+                logger.info("インデックスの訓練を開始します...")
+                self.index.train(normalized_vectors)
+                self.is_trained = True
+                self.index.add(normalized_vectors)
+        else:
+            self.index.add(normalized_vectors)
+        
         self.metadata.extend(metadata)
     
     def search(self, query_vector: np.ndarray, top_k: int = 3) -> list:
@@ -50,6 +79,11 @@ class Indexer:
         
         # クエリベクトルもL2正規化
         normalized_query = self.normalize_vectors(query_vector.copy())
+        
+        # IVF-PQの場合、検索時に探索するクラスタ数を指定
+        if isinstance(self.index, faiss.IndexIVFPQ):
+            self.index.nprobe = 10  # 探索するクラスタ数（大きいほど精度が上がるが遅くなる）
+        
         scores, indices = self.index.search(normalized_query, top_k)
         return [(self.metadata[idx], score) for idx, score in zip(indices[0], scores[0])]
 

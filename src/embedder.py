@@ -3,7 +3,7 @@ from typing import List, Dict
 
 class Embedder:
     def __init__(self):
-        self.model = SentenceTransformer("hotchpotch/static-embedding-japanese")
+        self.model = SentenceTransformer("hotchpotch/static-embedding-japanese", device="cpu", truncate_dim=128)
 
     def generate_embedding(self, text: str) -> List[float]:
         """テキストをベクトル化"""
