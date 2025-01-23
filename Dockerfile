@@ -1,4 +1,4 @@
-FROM python:3.12-slim as builder
+FROM python:3.12-slim AS builder
 
 # ビルド用の依存関係をインストール
 RUN apt-get update && apt-get install -y \

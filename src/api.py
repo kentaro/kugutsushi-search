@@ -14,14 +14,18 @@ from src.extractor import extract_from_pdf
 
 logger = logging.getLogger(__name__)
 
+# 先にモデルをロード
+logger.info("モデルのロードを開始")
+embedder = Embedder()
+indexer = Indexer()
+logger.info("モデルのロードが完了")
+
+# FastAPIアプリケーションを作成
 app = FastAPI(
     title="Kugutsushi Search API",
     description="PDF文書の検索APIサーバー",
     version="0.1.0"
 )
-
-embedder = Embedder()
-indexer = Indexer()
 
 # 処理済みファイルを管理
 PROCESSED_FILES_PATH = "embeddings/processed_files.json"

@@ -3,6 +3,12 @@
 ## **1. プロジェクト概要**
 本プロジェクトでは、PDFドキュメントを対象にベクトル検索を実現するローカル検索エンジンを開発します。OCR処理済みのPDFからテキストを抽出し、文ベクトルを生成してインデックスを作成、検索クエリに基づいて類似文を高速に検索できるシステムを構築します。
 
+### **1.1. プラットフォーム互換性に関する注意事項**
+- faissインデックスはプラットフォーム依存のバイナリ形式で保存されます
+- 本システムはLinux/amd64環境での実行を前提としています
+- ローカル開発時も必ず`--platform linux/amd64`オプションを指定してDockerコンテナを実行してください
+- Apple Silicon (M1/M2/M3) Mac上で開発する場合も、必ずamd64プラットフォームでコンテナを実行してください
+
 ---
 
 ## **2. 要求仕様**
@@ -103,16 +109,24 @@ kugutsushi-search/
 
 #### **5.3.1. イメージのビルド**
 ```bash
-docker build -t kugutsushi-search .
+# 必ずamd64プラットフォーム向けにビルド
+docker buildx build --platform linux/amd64 -t kugutsushi-search .
 ```
 
 #### **5.3.2. APIサーバーの起動**
 ```bash
 # 重要: embeddingsディレクトリをマウントして起動
-docker run --rm -p 8000:8000 -v $(pwd)/embeddings:/app/embeddings kugutsushi-search
+# 必ずamd64プラットフォームで実行
+docker run --rm \
+  --platform linux/amd64 \
+  -p 8000:8000 \
+  -v $(pwd)/embeddings:/app/embeddings \
+  kugutsushi-search
 ```
 
-注意: ボリュームマウント（`-v`オプション）は必須です。マウントしないと、コンテナ停止時にインデックスデータが失われます。
+注意: 
+- ボリュームマウント（`-v`オプション）は必須です。マウントしないと、コンテナ停止時にインデックスデータが失われます。
+- プラットフォームオプション（`--platform linux/amd64`）は必須です。異なるプラットフォームで実行すると、faissインデックスの互換性の問題が発生します。
 
 #### **5.3.3. CLIクライアントの使用**
 ```bash

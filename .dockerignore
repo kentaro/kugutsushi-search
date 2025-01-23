@@ -39,3 +39,4 @@ ENV/
 embeddings/
 *.faiss
 docs/*.pdf 
+.local/
