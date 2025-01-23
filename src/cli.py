@@ -4,7 +4,7 @@ import os
 from typing import Optional, List
 from pathlib import Path
 
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = os.environ.get("KUGUTSUSHI_API_URL", "http://localhost:8000")
 
 def print_search_results(results: List[dict]) -> None:
     """検索結果を表示"""
@@ -16,7 +16,7 @@ def print_search_results(results: List[dict]) -> None:
         print(f"テキスト: {result['text']}")
         print()
 
-def upload_pdf_files(files: List[Path]) -> None:
+def upload_pdf_files(files: List[Path], api_url: str) -> None:
     """PDFファイルをアップロードして処理します。"""
     if not files:
         click.echo("PDFファイルが見つかりません。", err=True)
@@ -30,7 +30,7 @@ def upload_pdf_files(files: List[Path]) -> None:
         try:
             with open(pdf_file, 'rb') as f:
                 files = {'file': (pdf_file.name, f, 'application/pdf')}
-                response = requests.post(f"{API_BASE_URL}/upload", files=files)
+                response = requests.post(f"{api_url}/upload", files=files)
                 response.raise_for_status()
                 
             result = response.json()
@@ -55,19 +55,23 @@ def upload_pdf_files(files: List[Path]) -> None:
     click.echo(f"\n処理完了: {processed}個のファイルを処理、{skipped}個のファイルをスキップしました。")
 
 @click.group()
-def cli():
+@click.option('--api-url', default=API_BASE_URL, help='APIサーバーのURL')
+@click.pass_context
+def cli(ctx, api_url: str):
     """Kugutsushi Search CLI - PDFドキュメント検索ツール"""
-    pass
+    ctx.ensure_object(dict)
+    ctx.obj['api_url'] = api_url
 
 @cli.command()
 @click.argument('query')
 @click.option('--top-k', default=3, help='表示する検索結果の数')
-def search(query: str, top_k: int):
+@click.pass_context
+def search(ctx, query: str, top_k: int):
     """
     テキストクエリで検索を実行します。
     """
     try:
-        response = requests.get(f"{API_BASE_URL}/search", params={
+        response = requests.get(f"{ctx.obj['api_url']}/search", params={
             "query": query,
             "top_k": top_k
         })
@@ -85,7 +89,8 @@ def search(query: str, top_k: int):
 @cli.command()
 @click.argument('path', type=click.Path(exists=True))
 @click.option('--recursive/--no-recursive', '-r', default=False, help='サブディレクトリも含めて処理するかどうか')
-def upload(path: str, recursive: bool):
+@click.pass_context
+def upload(ctx, path: str, recursive: bool):
     """
     PDFファイルまたはディレクトリをアップロードしてインデックスに追加します。
     PATHにディレクトリを指定した場合、その中のPDFファイルを全て処理します。
@@ -101,7 +106,7 @@ def upload(path: str, recursive: bool):
             pattern = '**/*.pdf' if recursive else '*.pdf'
             files = sorted(path.glob(pattern))
         
-        upload_pdf_files(files)
+        upload_pdf_files(files, ctx.obj['api_url'])
         
     except requests.exceptions.RequestException as e:
         click.echo(f"APIリクエストエラー: {str(e)}", err=True)
@@ -109,10 +114,11 @@ def upload(path: str, recursive: bool):
         click.echo(f"エラーが発生しました: {str(e)}", err=True)
 
 @cli.command()
-def reindex():
+@click.pass_context
+def reindex(ctx):
     """インデックスを再構築"""
     try:
-        response = requests.post(f"{API_BASE_URL}/reindex")
+        response = requests.post(f"{ctx.obj['api_url']}/reindex")
         response.raise_for_status()
         click.echo("インデックスの再構築が完了しました")
     except requests.exceptions.RequestException as e:
@@ -121,4 +127,4 @@ def reindex():
             print(e.response.json()["detail"])
 
 if __name__ == '__main__':
-    cli() 
+    cli(obj={}) 
