@@ -1,38 +1,43 @@
-FROM python:3.12-slim AS builder
-
-# ビルド用の依存関係をインストール
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# 仮想環境を作成
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# 依存関係をインストール
-COPY requirements-api.txt .
-RUN pip install --no-cache-dir -r requirements-api.txt
-
-# 実行用のステージ
 FROM python:3.12-slim
 
-# 仮想環境をコピー
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# 必要なパッケージのインストール
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
 
-# アプリケーションのディレクトリを作成
+# 作業ディレクトリの設定
 WORKDIR /app
 
-# アプリケーションのコードをコピー
+# 依存関係ファイルのコピー
+COPY requirements-api.txt requirements-api.txt
+COPY requirements-cli.txt requirements-cli.txt
+
+# 仮想環境の作成とパッケージのインストール
+ENV VIRTUAL_ENV=/opt/venv
+RUN python -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# 依存関係のインストール
+RUN pip install --no-cache-dir -r requirements-api.txt
+
+# ソースコードのコピー
 COPY . .
 
-# embeddingsディレクトリを作成
-RUN mkdir -p embeddings/.cache
-ENV HF_HOME=/app/.cache/huggingface
+# データディレクトリの作成
+RUN mkdir -p embeddings && \
+    mkdir -p .cache/huggingface && \
+    chown -R nobody:nogroup embeddings .cache
 
-# ポートを公開
+# 環境変数の設定
+ENV HF_HOME=/app/.cache/huggingface
+ENV PYTHONPATH=/app
+
+# 実行ユーザーの変更
+USER nobody
+
+# ポートの公開
 EXPOSE 8000
 
-# アプリケーションを実行
+# アプリケーションの実行
 CMD ["python", "-m", "src.main"] 

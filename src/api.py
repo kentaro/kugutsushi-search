@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 import io
+import numpy as np
 import faiss
 
 from src.embedder import Embedder
@@ -18,7 +19,6 @@ logger = logging.getLogger(__name__)
 # 定数
 EMBEDDINGS_DIR = Path("embeddings")
 PROCESSED_FILES_PATH = EMBEDDINGS_DIR / "processed_files.json"
-DEFAULT_INDEX_PATH = EMBEDDINGS_DIR / "default.json"
 EMBEDDINGS_DIR.mkdir(exist_ok=True)
 
 # モデルの初期化
@@ -59,21 +59,33 @@ def save_processed_files(files: set) -> None:
 # グローバル変数
 processed_files = load_processed_files()
 
-# PDFの処理関数
-def process_pdf_content(content: bytes, filename: str) -> int:
+async def process_pdf_content(content: bytes, filename: str) -> int:
     """PDFの内容を処理してインデックスに追加する"""
-    logger.info(f"ファイルを処理: {filename}")
+    logger.info(f"=== PDFの処理を開始: {filename} ===")
+    logger.info(f"ファイルサイズ: {len(content) / 1024 / 1024:.2f}MB")
     
     try:
         # PDFからテキストを抽出
+        logger.info("テキスト抽出を開始")
         pdf_bytes = io.BytesIO(content)
         texts = extract_from_pdf(pdf_bytes.getvalue())
-        logger.info(f"PDFの処理完了: {len(texts)}ページ")
+        logger.info(f"テキスト抽出完了: {len(texts)}ページ")
+        
+        # 空のページをスキップ
+        texts = [
+            {
+                "text": text["text"].strip(),
+                "page": text["page"]
+            }
+            for text in texts
+            if len(text["text"].strip()) > 0
+        ]
         
         # ベクトルとメタデータを生成
+        logger.info("ベクトル生成を開始")
         vectors = []
         metadata = []
-        for text in texts:
+        for i, text in enumerate(texts, 1):
             vector = embedder.generate_embedding(text["text"])
             vectors.append(vector)
             metadata.append({
@@ -81,20 +93,38 @@ def process_pdf_content(content: bytes, filename: str) -> int:
                 "file": filename,
                 "page": text["page"] - 1
             })
-        logger.info(f"ベクトルの生成完了: {len(vectors)}件")
+            if i % 10 == 0:  # 10ページごとに進捗を表示
+                logger.info(f"進捗: {i}/{len(texts)} ページ完了 ({i/len(texts)*100:.1f}%)")
+        
+        logger.info(f"ベクトル生成完了: {len(vectors)}件")
         
         # インデックスに追加して保存
-        indexer.add(vectors, metadata)
+        logger.info("インデックスへの追加を開始")
+        vectors_np = np.array(vectors, dtype=np.float32)
+        indexer.add(vectors_np, metadata)
+        logger.info(f"インデックスに{len(vectors)}件追加完了")
+        
+        logger.info("インデックスの保存を開始")
         indexer.save()
         logger.info("インデックスの保存完了")
         
         return len(texts)
         
     except Exception as e:
-        logger.error(f"PDF処理中にエラー発生: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"PDF処理エラー: {str(e)}")
+        logger.error(f"=== エラー発生: {filename} ===")
+        logger.error(f"エラーの種類: {type(e).__name__}")
+        logger.error(f"エラーメッセージ: {str(e)}")
+        logger.error("詳細なスタックトレース:", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "PDF処理エラー",
+                "file": filename,
+                "message": str(e),
+                "type": type(e).__name__
+            }
+        )
 
-# APIエンドポイント
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """PDFファイルをアップロードして処理する"""
@@ -105,7 +135,7 @@ async def upload_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"{file.filename}は既に処理済みです")
     
     content = await file.read()
-    texts_count = process_pdf_content(content, file.filename)
+    texts_count = await process_pdf_content(content, file.filename)
     
     processed_files.add(file.filename)
     save_processed_files(processed_files)
@@ -126,8 +156,6 @@ async def reindex():
         # ファイル管理の初期化
         processed_files.clear()
         save_processed_files(processed_files)
-        if Path(DEFAULT_INDEX_PATH).exists():
-            Path(DEFAULT_INDEX_PATH).unlink()
         
         # 各ファイルの再処理
         total_processed = 0
@@ -135,7 +163,7 @@ async def reindex():
             path = Path(file_path)
             if path.exists():
                 content = path.read_bytes()
-                process_pdf_content(content, file_path)
+                await process_pdf_content(content, file_path)
                 processed_files.add(file_path)
                 total_processed += 1
         

@@ -37,6 +37,16 @@ ENV/
 
 # Project specific
 embeddings/
-*.faiss
-docs/*.pdf 
+.cache/
+docs/
+tests/
+*.log
+.env
 .local/
+*.npz
+*.npy
+
+# Docker
+Dockerfile*
+.dockerignore
+docker-compose*.yml
