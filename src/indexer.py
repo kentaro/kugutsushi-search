@@ -1,11 +1,11 @@
 from typing import List, Dict, Tuple
 import numpy as np
 import faiss
-import json
 import os
 from pathlib import Path
 import logging
 import numpy.lib.format as npy_format
+from .database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -13,22 +13,39 @@ class Indexer:
     def __init__(self, dimension: int = 128):  # truncate_dimで128次元に削減
         self.dimension = dimension
         # IVF-PQの設定
-        # nlist: クラスタ数（通常、データ数の平方根程度）
-        # ncentroids: サブクラスタ数（通常8または16）
-        # nbits_per_idx: 各サブベクトルのビット数（通常8）
-        nlist = 100  # クラスタ数（データ量に応じて調整）
-        m = 16  # サブベクトルの数（dimension を 8 で割り切れる数）
-        nbits = 8  # 各サブベクトルのビット数
+        self.nlist = 100  # クラスタ数（データ量に応じて調整）
+        self.m = 16  # サブベクトルの数（dimension を 8 で割り切れる数）
+        self.nbits = 8  # 各サブベクトルのビット数
+        
+        # 訓練に必要なデータ数（nlist * 39）
+        self.min_training_size = self.nlist * 39
+        
+        # 訓練前用の一時的なインデックス
+        self.temp_index = faiss.IndexFlatIP(dimension)
+        
+        # 本番用のインデックス（訓練後に初期化）
+        self.index = None
+        self.is_trained = False
+        
+        # メタデータをSQLiteで管理
+        self.db = Database()
+    
+    def _init_ivf_pq(self, vectors: np.ndarray):
+        """IVF-PQインデックスの初期化と訓練"""
+        logger.info(f"IVF-PQインデックスの訓練を開始（データ数: {len(vectors)}）")
         
         # 量子化器の作成
-        quantizer = faiss.IndexFlatIP(dimension)
+        quantizer = faiss.IndexFlatIP(self.dimension)
         # IVF-PQインデックスの作成
-        self.index = faiss.IndexIVFPQ(quantizer, dimension, nlist, m, nbits)
+        self.index = faiss.IndexIVFPQ(quantizer, self.dimension, self.nlist, self.m, self.nbits)
         # 内積で類似度を計算するように設定
         self.index.metric_type = faiss.METRIC_INNER_PRODUCT
-        # 訓練前はaddできないのでis_trainedフラグを追加
-        self.is_trained = False
-        self.metadata = []
+        # 訓練実行
+        self.index.train(vectors)
+        # 訓練済みデータの追加
+        self.index.add(vectors)
+        self.is_trained = True
+        logger.info("IVF-PQインデックスの訓練が完了")
     
     def normalize_vectors(self, vectors: np.ndarray) -> np.ndarray:
         """ベクトルをL2正規化する"""
@@ -51,24 +68,29 @@ class Indexer:
         # L2正規化を適用
         normalized_vectors = self.normalize_vectors(vectors.copy())
         
-        # インデックスが未訓練の場合は訓練を実行
-        if not self.is_trained:
-            if len(normalized_vectors) < 100:  # 訓練データが少なすぎる場合
-                logger.warning("訓練データが少なすぎます。一時的にFlatIPインデックスを使用します。")
-                self.index = faiss.IndexFlatIP(self.dimension)
-                self.index.add(normalized_vectors)
-            else:
-                logger.info("インデックスの訓練を開始します...")
-                self.index.train(normalized_vectors)
-                self.is_trained = True
-                self.index.add(normalized_vectors)
-        else:
-            self.index.add(normalized_vectors)
+        # 一時インデックスにデータを追加
+        self.temp_index.add(normalized_vectors)
         
-        self.metadata.extend(metadata)
+        # メタデータをSQLiteに追加
+        start_id = self.db.get_metadata_count()
+        self.db.add_metadata(metadata, start_id)
+        
+        # 十分なデータが集まったらIVF-PQの訓練を実行
+        total_vectors = self.temp_index.ntotal
+        if not self.is_trained and total_vectors >= self.min_training_size:
+            # 全ベクトルを取得
+            all_vectors = np.empty((total_vectors, self.dimension), dtype=np.float32)
+            self.temp_index.reconstruct_n(0, total_vectors, all_vectors)
+            # IVF-PQの初期化と訓練
+            self._init_ivf_pq(all_vectors)
+            # 一時インデックスのクリア
+            self.temp_index = None
     
     def search(self, query_vector: np.ndarray, top_k: int = 3) -> list:
-        if self.index.ntotal == 0:
+        """ベクトル検索を実行"""
+        # インデックスの状態チェック
+        if (self.temp_index is None or self.temp_index.ntotal == 0) and \
+           (self.index is None or self.index.ntotal == 0):
             logger.warning("インデックスが空です")
             return []
 
@@ -80,29 +102,34 @@ class Indexer:
         # クエリベクトルもL2正規化
         normalized_query = self.normalize_vectors(query_vector.copy())
         
-        # IVF-PQの場合、検索時に探索するクラスタ数を指定
-        if isinstance(self.index, faiss.IndexIVFPQ):
-            self.index.nprobe = 10  # 探索するクラスタ数（大きいほど精度が上がるが遅くなる）
+        # 使用するインデックスを決定
+        if self.is_trained:
+            # IVF-PQインデックスが訓練済みの場合
+            self.index.nprobe = 10  # 探索するクラスタ数
+            scores, indices = self.index.search(normalized_query, top_k)
+        else:
+            # 訓練前は一時インデックスを使用
+            scores, indices = self.temp_index.search(normalized_query, top_k)
         
-        scores, indices = self.index.search(normalized_query, top_k)
-        return [(self.metadata[idx], score) for idx, score in zip(indices[0], scores[0])]
+        # SQLiteからメタデータを取得
+        metadata_list = self.db.get_metadata([int(idx) for idx in indices[0]])
+        return [(metadata, score) for metadata, score in zip(metadata_list, scores[0])]
 
     def save(self, index_dir: str = "embeddings") -> None:
         """インデックスをプラットフォーム非依存な形式で保存（圧縮あり）"""
         index_dir = Path(index_dir)
         index_dir.mkdir(exist_ok=True)
         
-        # メタデータを保存
-        metadata_path = index_dir / "metadata.json"
-        with open(metadata_path, 'w', encoding='utf-8') as f:
-            json.dump(self.metadata, f, ensure_ascii=False, indent=2)
-        
         # インデックスの生ベクトルを取得（すでに正規化済み）
         vector_path = index_dir / "vectors.npz"
-        if self.index.ntotal > 0:  # インデックスが空でない場合のみベクトルを取得
+        
+        # 使用するインデックスを決定
+        active_index = self.index if self.is_trained else self.temp_index
+        
+        if active_index is not None and active_index.ntotal > 0:
             # numpy配列を直接取得
-            vectors = np.empty((self.index.ntotal, self.dimension), dtype=np.float32)
-            self.index.reconstruct_n(0, self.index.ntotal, vectors)
+            vectors = np.empty((active_index.ntotal, self.dimension), dtype=np.float32)
+            active_index.reconstruct_n(0, active_index.ntotal, vectors)
             # ベクトルを圧縮して保存
             np.savez_compressed(vector_path, vectors=vectors)
         else:
@@ -112,39 +139,41 @@ class Indexer:
         
         # サイズ情報をログ出力
         vector_size = os.path.getsize(vector_path) / (1024 * 1024)  # MB単位
-        metadata_size = os.path.getsize(metadata_path) / (1024 * 1024)  # MB単位
-        logger.info(f"インデックスを保存: {len(self.metadata)}件")
+        db_size = os.path.getsize(self.db.db_path) / (1024 * 1024)  # MB単位
+        logger.info(f"インデックスを保存: {self.db.get_metadata_count()}件")
         logger.info(f"ベクトルファイルサイズ: {vector_size:.2f}MB")
-        logger.info(f"メタデータファイルサイズ: {metadata_size:.2f}MB")
-        logger.debug(f"メタデータ: {metadata_path}")
+        logger.info(f"データベースファイルサイズ: {db_size:.2f}MB")
+        logger.debug(f"データベース: {self.db.db_path}")
         logger.debug(f"ベクトル: {vector_path}")
     
     def load(self, index_dir: str = "embeddings") -> None:
         """圧縮されたインデックスを読み込み"""
         index_dir = Path(index_dir)
-        metadata_path = index_dir / "metadata.json"
         vector_path = index_dir / "vectors.npz"
         
-        if not metadata_path.exists() or not vector_path.exists():
+        if not vector_path.exists():
             logger.warning("インデックスファイルが見つかりません")
             return
-        
-        # メタデータを読み込み
-        with open(metadata_path, 'r', encoding='utf-8') as f:
-            self.metadata = json.load(f)
         
         # 圧縮されたベクトルを読み込んでインデックスを再構築
         with np.load(vector_path) as data:
             vectors = data['vectors']
-            self.index = faiss.IndexFlatIP(self.dimension)
-            if len(vectors) > 0:
-                # ベクトルはすでに正規化済みなので、そのまま追加
-                self.index.add(vectors)
+            if len(vectors) >= self.min_training_size:
+                # 十分なデータがある場合はIVF-PQで初期化
+                self._init_ivf_pq(vectors)
+                self.temp_index = None
+            else:
+                # データが少ない場合は一時インデックスとして保存
+                self.temp_index = faiss.IndexFlatIP(self.dimension)
+                if len(vectors) > 0:
+                    self.temp_index.add(vectors)
+                self.index = None
+                self.is_trained = False
         
         # サイズ情報をログ出力
         vector_size = os.path.getsize(vector_path) / (1024 * 1024)  # MB単位
-        metadata_size = os.path.getsize(metadata_path) / (1024 * 1024)  # MB単位
-        logger.info(f"インデックスを読み込み: {len(self.metadata)}件")
+        db_size = os.path.getsize(self.db.db_path) / (1024 * 1024)  # MB単位
+        logger.info(f"インデックスを読み込み: {self.db.get_metadata_count()}件")
         logger.info(f"ベクトルファイルサイズ: {vector_size:.2f}MB")
-        logger.info(f"メタデータファイルサイズ: {metadata_size:.2f}MB")
+        logger.info(f"データベースファイルサイズ: {db_size:.2f}MB")
         logger.debug(f"ベクトルの形状: {vectors.shape}") 
