@@ -72,21 +72,25 @@ class Indexer:
         # L2正規化を適用
         normalized_vectors = self.normalize_vectors(vectors.copy())
         
-        # 一時インデックスにデータを追加
-        self.temp_index.add(normalized_vectors)
-        
         # メタデータをSQLiteに追加
         start_id = self.db.get_metadata_count()
         self.db.add_metadata(metadata, start_id)
         
-        # 十分なデータが集まったらIVF-PQの訓練を実行
-        total_vectors = self.temp_index.ntotal
-        if not self.is_trained and total_vectors >= self.min_training_size:
-            # 全ベクトルを取得
-            all_vectors = np.empty((total_vectors, self.dimension), dtype=np.float32)
-            self.temp_index.reconstruct_n(0, total_vectors, all_vectors)
-            # IVF-PQの初期化と訓練
-            self._init_ivf_pq(all_vectors)
+        if self.is_trained:
+            # 訓練済みの場合は本番インデックスに追加
+            self.index.add(normalized_vectors)
+        else:
+            # 未訓練の場合は一時インデックスに追加
+            self.temp_index.add(normalized_vectors)
+            
+            # 十分なデータが集まったらIVF-PQの訓練を実行
+            total_vectors = self.temp_index.ntotal
+            if total_vectors >= self.min_training_size:
+                # 全ベクトルを取得
+                all_vectors = np.empty((total_vectors, self.dimension), dtype=np.float32)
+                self.temp_index.reconstruct_n(0, total_vectors, all_vectors)
+                # IVF-PQの初期化と訓練
+                self._init_ivf_pq(all_vectors)
     
     def search(self, query_vector: np.ndarray, top_k: int = 3) -> list:
         """ベクトル検索を実行"""
