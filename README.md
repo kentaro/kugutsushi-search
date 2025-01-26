@@ -3,11 +3,20 @@
 ## **1. プロジェクト概要**
 本プロジェクトでは、PDFドキュメントを対象にベクトル検索を実現するローカル検索エンジンを開発します。OCR処理済みのPDFからテキストを抽出し、文ベクトルを生成してインデックスを作成、検索クエリに基づいて類似文を高速に検索できるシステムを構築します。
 
-### **1.1. プラットフォーム互換性に関する注意事項**
+主な用途として、Raspberry Pi上で動作するDiscordボットとn8nを組み合わせたRAGシステムのバックエンドとして機能します。
+
+### **1.1. システム構成**
+- Raspberry Pi上で動作するDiscordボットが特定の発言を検知
+- n8n上のOpenAIエージェントが発言からクエリを生成
+- 本検索エンジンがクエリに基づいて関連文書を検索
+- OpenAIエージェントが検索結果を用いてRAGベースの回答を生成
+- Discordボットが回答をメッセージとして投稿
+
+### **1.2. プラットフォーム互換性に関する注意事項**
 - faissインデックスはプラットフォーム依存のバイナリ形式で保存されます
-- 本システムはLinux/amd64環境での実行を前提としています
-- ローカル開発時も必ず`--platform linux/amd64`オプションを指定してDockerコンテナを実行してください
-- Apple Silicon (M1/M2/M3) Mac上で開発する場合も、必ずamd64プラットフォームでコンテナを実行してください
+- インデックスの構築はMac（開発環境）で行い、numpy形式で保存します
+- Raspberry Pi上では起動時にnumpyデータからfaissインデックスを自動的に再構築します
+- 本番環境はLinux/arm64環境（Raspberry Pi）での実行を前提としています
 
 ---
 
@@ -20,12 +29,12 @@
 - 文ベクトルは`hotchpotch/static-embedding-japanese`モデルを使用。
 - ベクトル検索エンジンは`faiss`を利用。
 - 検索機能はCLIコマンドとAPIの2通りで提供。
-- ローカル環境（MacBook）で動作確認後、Google Cloudにコンテナとしてデプロイ可能。
+- ローカル環境（MacBook）で動作確認後、Raspberry Piにデプロイ。
 
 ### **2.2. 拡張要件**
-- 検索結果にクエリ一致箇所の文脈をハイライト表示。
 - 既に処理済みのPDFファイルは再処理をスキップ。
 - 処理の進捗状況をプログレスバーで表示。
+- プラットフォーム間でのインデックス互換性のためnumpy形式でデータを保存。
 
 ---
 
@@ -64,6 +73,7 @@ kugutsushi-search/
 #### **3.2.3. インデクシング (`indexer.py`)**
 - `faiss`を使用してベクトルデータを管理。
 - メタデータ（ファイル名、ページ番号）をインデックスと紐付け。
+- numpy形式でベクトルデータを保存し、起動時にfaissインデックスを構築。
 - 新規ベクトルのみを追加可能。
 
 #### **3.2.4. APIエンドポイント (`api.py`)**
@@ -78,18 +88,7 @@ kugutsushi-search/
 
 ---
 
-## **4. 検索結果ハイライト**
-
-### **4.1. 概要**
-検索クエリと一致するテキスト部分を強調表示し、その前後の文脈を提供。
-
-### **4.2. 実装例**
-- 正規表現を使用してクエリと一致する箇所を検出。
-- 一致部分を`**`で囲み、文脈とともにリスト形式で返却。
-
----
-
-## **5. Docker化とデプロイ**
+## **4. Docker化とデプロイ**
 
 ### **5.1. Docker環境**
 - Python 3.10をベースイメージとして使用。
@@ -98,35 +97,46 @@ kugutsushi-search/
 - `embeddings`ディレクトリをコンテナ内に作成。
 
 ### **5.2. デプロイ計画**
-1. Docker化:
-   - すべての依存関係をDockerコンテナにまとめる。
-   - `Dockerfile`を作成し、ローカルで動作確認。
-2. Google Cloudへの移行:
-   - DockerイメージをGoogle Container Registry (GCR) にアップロード。
-   - Google Cloud Runにデプロイしてスケーラブルな運用を実現。
+1. インデックス構築:
+   - Mac上でPDFからテキストを抽出し、ベクトル化
+   - numpy形式でベクトルデータを保存
+2. Docker化:
+   - すべての依存関係をDockerコンテナにまとめる
+   - `Dockerfile`を作成し、ローカルで動作確認
+3. Raspberry Piへのデプロイ:
+   - numpyデータとDockerイメージを転送
+   - 起動時にnumpyデータからfaissインデックスを構築
 
 ### **5.3. Dockerの実行方法**
 
 #### **5.3.1. イメージのビルド**
 ```bash
-# 必ずamd64プラットフォーム向けにビルド
-docker buildx build --platform linux/amd64 -t kugutsushi-search .
+# ローカル開発用（Mac）
+docker build -t kugutsushi-search:dev .
+
+# 本番環境用（Raspberry Pi向け）
+docker buildx build --platform linux/arm64 -t kugutsushi-search:prod .
 ```
 
 #### **5.3.2. APIサーバーの起動**
 ```bash
-# 重要: embeddingsディレクトリをマウントして起動
-# 必ずamd64プラットフォームで実行
+# Mac（開発環境）での実行 - インデックス構築
 docker run --rm \
-  --platform linux/amd64 \
   -p 8000:8000 \
   -v $(pwd)/embeddings:/app/embeddings \
-  kugutsushi-search
+  kugutsushi-search:dev
+
+# Raspberry Pi（本番環境）での実行 - numpyデータからインデックス再構築
+docker run --rm \
+  -p 8000:8000 \
+  -v $(pwd)/embeddings:/app/embeddings \
+  kugutsushi-search:prod
 ```
 
 注意: 
-- ボリュームマウント（`-v`オプション）は必須です。マウントしないと、コンテナ停止時にインデックスデータが失われます。
-- プラットフォームオプション（`--platform linux/amd64`）は必須です。異なるプラットフォームで実行すると、faissインデックスの互換性の問題が発生します。
+- ボリュームマウント（`-v`オプション）は必須です。マウントしないと、インデックスデータが失われます。
+- インデックスの構築はMac上で行い、numpy形式で保存します。
+- Raspberry Pi上では起動時にnumpyデータからfaissインデックスを自動的に再構築します。
 
 #### **5.3.3. CLIクライアントの使用**
 ```bash
