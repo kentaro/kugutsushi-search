@@ -1,0 +1,21 @@
+[Unit]
+Description=Kugutsushi Search API - PDF Hybrid Search Engine
+After=network.target
+
+[Service]
+Type=simple
+User=kentaro
+Group=kentaro
+WorkingDirectory=/home/kentaro/src/github.com/kentaro/kugutsushi-search
+Environment="PATH=/home/kentaro/src/github.com/kentaro/kugutsushi-search/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=/home/kentaro/src/github.com/kentaro/kugutsushi-search"
+ExecStart=/home/kentaro/src/github.com/kentaro/kugutsushi-search/venv/bin/uvicorn src.api:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=5
+
+# Memory limits for Raspberry Pi 4GB
+MemoryMax=3G
+MemoryHigh=2.5G
+
+[Install]
+WantedBy=multi-user.target

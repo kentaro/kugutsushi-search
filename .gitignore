@@ -31,7 +31,20 @@ ENV/
 *.swo
 
 # Project specific
+.env
 embeddings/
+embeddings.bak*/
 docs/
 .local/
 .cache/
+
+# Logs
+*.log
+
+# Testing
+.pytest_cache/
+*.db-shm
+*.db-wal
+
+# Docker
+scripts/image.tar

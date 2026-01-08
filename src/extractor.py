@@ -1,63 +1,80 @@
+"""PDF抽出 - PyMuPDFによるテキスト抽出"""
+
 import fitz
 from pathlib import Path
 from typing import List, Dict, Union
 import io
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from tqdm import tqdm
+import logging
 
-class PDFExtractor:
-    def __init__(self, pdf_data: Union[str, bytes, Path], max_workers: int = 8):
-        if isinstance(pdf_data, (str, Path)):
-            self.pdf_data = Path(pdf_data)
-            if not self.pdf_data.exists():
-                raise FileNotFoundError(f"PDF file not found: {pdf_data}")
+logger = logging.getLogger(__name__)
+
+CHUNK_SIZE = 500  # 文字数
+CHUNK_OVERLAP = 50  # オーバーラップ
+
+
+def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
+    """テキストをチャンクに分割
+
+    句点・改行で区切りつつ、chunk_size文字程度のチャンクを作成。
+    句点がない長いテキストは強制分割。
+    """
+    if len(text) <= chunk_size:
+        return [text]
+
+    # 句点・改行で分割
+    sentences = re.split(r'(?<=[。．！？\n])', text)
+
+    chunks = []
+    current = ""
+
+    for sent in sentences:
+        # 文自体がchunk_sizeより長い場合は強制分割
+        while len(sent) > chunk_size:
+            if current:
+                chunks.append(current.strip())
+                current = ""
+            chunks.append(sent[:chunk_size].strip())
+            sent = sent[chunk_size - overlap:]
+
+        if len(current) + len(sent) <= chunk_size:
+            current += sent
         else:
-            self.pdf_data = io.BytesIO(pdf_data)
-        self.max_workers = max_workers
+            if current:
+                chunks.append(current.strip())
+            current = sent
 
-    def clean_text(self, text: str) -> str:
-        """テキストを整形"""
-        # 連続する空白を1つに
-        text = re.sub(r'\s+', ' ', text)
-        # 文末の句点で改行を入れる
-        text = re.sub(r'。', '。\n', text)
-        # 先頭と末尾の空白を削除
-        return text.strip()
+    if current.strip():
+        chunks.append(current.strip())
 
-    def process_page(self, page_info: tuple) -> Dict[str, any]:
-        """1ページを処理"""
-        page, i, file_name = page_info
-        text = page.get_text()
-        if text and text.strip():
-            return {
-                "page": i,
-                "text": self.clean_text(text),
-                "file": file_name
-            }
-        return None
+    return chunks
 
-    def extract(self) -> List[Dict[str, any]]:
-        """PDFからテキストを抽出し、ページ単位でリストを返す"""
-        pages = []
-        with fitz.open(stream=self.pdf_data if isinstance(self.pdf_data, io.BytesIO) else str(self.pdf_data)) as doc:
-            file_name = str(self.pdf_data) if isinstance(self.pdf_data, Path) else self.pdf_data.name if hasattr(self.pdf_data, 'name') else "memory"
-            
-            # ページ情報をリストにまとめる
-            page_infos = [(page, i, file_name) for i, page in enumerate(doc, 1)]
-            
-            # マルチスレッドで処理
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # 進捗バーを表示しながら処理
-                futures = [executor.submit(self.process_page, page_info) for page_info in page_infos]
-                for future in tqdm(as_completed(futures), total=len(futures), desc="Processing PDF"):
-                    result = future.result()
-                    if result:
-                        pages.append(result)
 
-        return pages
+def extract_from_pdf(pdf_data: Union[str, bytes, Path]) -> List[Dict]:
+    """PDFからテキストを抽出
 
-def extract_from_pdf(pdf_data: Union[str, bytes, Path], max_workers: int = 8) -> List[Dict[str, any]]:
-    """PDFExtractorのヘルパー関数"""
-    extractor = PDFExtractor(pdf_data, max_workers=max_workers)
-    return extractor.extract() 
+    Args:
+        pdf_data: ファイルパス、バイトデータ、またはPathオブジェクト
+
+    Returns:
+        [{"page": ページ番号(1-indexed), "text": テキスト}, ...]
+    """
+    if isinstance(pdf_data, (str, Path)):
+        pdf_path = Path(pdf_data)
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"ファイルが見つかりません: {pdf_data}")
+        doc = fitz.open(str(pdf_path))
+    else:
+        doc = fitz.open(stream=io.BytesIO(pdf_data), filetype="pdf")
+
+    pages = []
+    with doc:
+        for i, page in enumerate(doc, 1):
+            text = page.get_text()
+            if text and text.strip():
+                # テキスト整形: 連続空白を1つに、句点で改行
+                text = re.sub(r'\s+', ' ', text)
+                text = re.sub(r'。', '。\n', text)
+                pages.append({"page": i, "text": text.strip()})
+
+    return pages

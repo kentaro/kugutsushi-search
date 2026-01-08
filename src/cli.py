@@ -1,130 +1,109 @@
+"""CLI ツール - コマンドラインから検索・アップロード"""
+
 import click
 import requests
-import os
-from typing import Optional, List
 from pathlib import Path
 
-API_BASE_URL = os.environ.get("KUGUTSUSHI_API_URL", "http://localhost:8000")
+API_URL = "http://localhost:8000"
 
-def print_search_results(results: List[dict]) -> None:
+
+def print_results(results: list) -> None:
     """検索結果を表示"""
-    for result in results:
-        print("-" * 80)
-        print(f"書籍: {Path(result['file']).name}")
-        print(f"ページ: {result['page'] + 1}")  # 0-indexedを1-indexedに変換
-        print(f"スコア: {result['score']:.3f}")
-        print(f"テキスト: {result['text']}")
-        print()
+    for r in results:
+        click.echo("-" * 60)
+        click.echo(f"書籍: {Path(r['file']).name}")
+        click.echo(f"ページ: {r['page'] + 1}")
+        click.echo(f"スコア: {r['score']:.3f}")
+        click.echo(f"テキスト: {r['text'][:200]}...")
+        click.echo()
 
-def upload_pdf_files(files: List[Path], api_url: str) -> None:
-    """PDFファイルをアップロードして処理します。"""
-    if not files:
-        click.echo("PDFファイルが見つかりません。", err=True)
-        return
-        
-    click.echo(f"{len(files)}個のPDFファイルを処理します...")
-    
-    processed = 0
-    skipped = 0
-    for pdf_file in files:
-        try:
-            with open(pdf_file, 'rb') as f:
-                files = {'file': (pdf_file.name, f, 'application/pdf')}
-                response = requests.post(f"{api_url}/upload", files=files)
-                response.raise_for_status()
-                
-            result = response.json()
-            if result.get("skipped", False):
-                skipped += 1
-                click.echo(f"スキップ: {pdf_file.name} (既に処理済み)")
-            else:
-                processed += 1
-                click.echo(f"処理完了: {pdf_file.name} ({result['texts_count']}件のテキストを追加)")
-                
-        except requests.exceptions.RequestException as e:
-            error_detail = ""
-            if hasattr(e.response, 'json'):
-                error_json = e.response.json()
-                error_detail = f"\nエラー詳細: {error_json.get('detail', '')}"
-                if 'traceback' in error_json:
-                    error_detail += f"\n\nスタックトレース:\n{error_json['traceback']}"
-            click.echo(f"エラー: {pdf_file.name} ({str(e)}){error_detail}", err=True)
-        except Exception as e:
-            click.echo(f"エラー: {pdf_file.name} ({str(e)})", err=True)
-            
-    click.echo(f"\n処理完了: {processed}個のファイルを処理、{skipped}個のファイルをスキップしました。")
 
 @click.group()
-@click.option('--api-url', default=API_BASE_URL, help='APIサーバーのURL')
+@click.option('--api-url', default=API_URL, envvar='KUGUTSUSHI_API_URL', help='APIサーバーURL')
 @click.pass_context
 def cli(ctx, api_url: str):
-    """Kugutsushi Search CLI - PDFドキュメント検索ツール"""
+    """Kugutsushi Search CLI"""
     ctx.ensure_object(dict)
     ctx.obj['api_url'] = api_url
 
+
 @cli.command()
 @click.argument('query')
-@click.option('--top-k', default=3, help='表示する検索結果の数')
+@click.option('--top-k', '-k', default=5, help='結果数')
+@click.option('--mode', '-m', default='hybrid+rerank',
+              type=click.Choice(['hybrid', 'hybrid+rerank']),
+              help='検索モード')
 @click.pass_context
-def search(ctx, query: str, top_k: int):
-    """
-    テキストクエリで検索を実行します。
-    """
+def search(ctx, query: str, top_k: int, mode: str):
+    """検索を実行"""
     try:
-        response = requests.get(f"{ctx.obj['api_url']}/search", params={
-            "query": query,
-            "top_k": top_k
-        })
-        response.raise_for_status()
-        
-        results = response.json()["results"]
-        
-        print_search_results(results)
-        
-    except requests.exceptions.RequestException as e:
-        click.echo(f"APIリクエストエラー: {str(e)}", err=True)
-    except Exception as e:
-        click.echo(f"エラーが発生しました: {str(e)}", err=True)
+        resp = requests.get(
+            f"{ctx.obj['api_url']}/search",
+            params={"query": query, "top_k": top_k, "mode": mode}
+        )
+        resp.raise_for_status()
+        print_results(resp.json()["results"])
+    except requests.RequestException as e:
+        click.echo(f"エラー: {e}", err=True)
+
 
 @cli.command()
 @click.argument('path', type=click.Path(exists=True))
-@click.option('--recursive/--no-recursive', '-r', default=False, help='サブディレクトリも含めて処理するかどうか')
+@click.option('--recursive', '-r', is_flag=True, help='サブディレクトリも処理')
 @click.pass_context
 def upload(ctx, path: str, recursive: bool):
-    """
-    PDFファイルまたはディレクトリをアップロードしてインデックスに追加します。
-    PATHにディレクトリを指定した場合、その中のPDFファイルを全て処理します。
-    """
-    try:
-        path = Path(path)
-        if path.is_file():
-            if not path.suffix.lower() == '.pdf':
-                click.echo(f"スキップ: {path} (PDFファイルではありません)", err=True)
-                return
-            files = [path]
-        else:
-            pattern = '**/*.pdf' if recursive else '*.pdf'
-            files = sorted(path.glob(pattern))
-        
-        upload_pdf_files(files, ctx.obj['api_url'])
-        
-    except requests.exceptions.RequestException as e:
-        click.echo(f"APIリクエストエラー: {str(e)}", err=True)
-    except Exception as e:
-        click.echo(f"エラーが発生しました: {str(e)}", err=True)
+    """PDFをアップロード"""
+    path = Path(path)
+    if path.is_file():
+        files = [path] if path.suffix.lower() == '.pdf' else []
+    else:
+        pattern = '**/*.pdf' if recursive else '*.pdf'
+        files = sorted(path.glob(pattern))
+
+    if not files:
+        click.echo("PDFファイルが見つかりません", err=True)
+        return
+
+    click.echo(f"{len(files)}個のPDFを処理します...")
+
+    for i, f in enumerate(files, 1):
+        try:
+            with open(f, 'rb') as fp:
+                resp = requests.post(
+                    f"{ctx.obj['api_url']}/upload",
+                    files={'file': (f.name, fp, 'application/pdf')}
+                )
+
+            if resp.status_code == 400 and "処理済み" in resp.text:
+                click.echo(f"[{i}/{len(files)}] スキップ: {f.name}")
+            else:
+                resp.raise_for_status()
+                result = resp.json()
+                click.echo(f"[{i}/{len(files)}] 完了: {f.name} ({result['texts_count']}ページ)")
+
+        except requests.RequestException as e:
+            click.echo(f"[{i}/{len(files)}] エラー: {f.name} - {e}", err=True)
+
 
 @cli.command()
 @click.pass_context
-def reindex(ctx):
-    """インデックスを再構築"""
+def status(ctx):
+    """システム状態を表示"""
     try:
-        response = requests.post(f"{ctx.obj['api_url']}/reindex")
-        response.raise_for_status()
-        click.echo("インデックスの再構築が完了しました")
-    except requests.exceptions.RequestException as e:
-        print(f"エラー: {e}")
-        if hasattr(e.response, 'json'):
-            print(e.response.json()["detail"])
+        resp = requests.get(f"{ctx.obj['api_url']}/status")
+        resp.raise_for_status()
+        data = resp.json()
+
+        click.echo(f"整合性: {'OK' if data['integrity'] else 'NG'}")
+        click.echo(f"詳細: {data['message']}")
+        click.echo(f"ベクトル: {data['vectors']}件")
+        click.echo(f"メタデータ: {data['metadata']}件")
+        click.echo(f"BM25: {data['bm25']}件")
+        click.echo(f"処理済みファイル: {data['processed_files']}件")
+
+    except requests.RequestException as e:
+        click.echo(f"エラー: {e}", err=True)
+
 
 if __name__ == '__main__':
-    cli(obj={}) 
+    cli(obj={})

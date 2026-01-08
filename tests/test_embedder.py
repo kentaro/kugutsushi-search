@@ -1,35 +1,45 @@
-import os
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+"""Embedderのテスト"""
+
+import pytest
+import numpy as np
 
 from src.embedder import Embedder
 
-def main():
-    try:
-        # テスト用のテキスト
+
+@pytest.fixture(scope="module")
+def embedder():
+    """Embedderインスタンス（モジュールスコープで共有）"""
+    return Embedder()
+
+
+class TestEmbedder:
+    def test_generate_query_embedding(self, embedder):
+        """クエリベクトル生成"""
+        vector = embedder.generate_query_embedding("ラーメンが食べたい")
+
+        assert isinstance(vector, np.ndarray)
+        assert vector.shape == (512,)
+        assert not np.isnan(vector).any()
+
+    def test_generate_document_embedding(self, embedder):
+        """ドキュメントベクトル生成"""
+        vector = embedder.generate_document_embedding("美味しいラーメン屋です")
+
+        assert isinstance(vector, np.ndarray)
+        assert vector.shape == (512,)
+
+    def test_generate_document_embeddings_batch(self, embedder):
+        """バッチベクトル生成"""
         texts = [
             "これは日本語のテストテキストです。",
             "文ベクトルの生成をテストします。",
-            "複数の文章を一度に処理できます。"
+            "複数の文章を一度に処理できます。",
         ]
+        vectors = embedder.generate_document_embeddings(texts)
 
-        # Embedderの初期化
-        embedder = Embedder()
-        
-        # 単一のテキストでテスト
-        print("単一テキストのベクトル生成テスト:")
-        vector = embedder.generate_embedding(texts[0])
-        print(f"Shape: {vector.shape}")
-        print(f"Vector: {vector[:5]}...")  # 最初の5要素だけ表示
-        
-        # 複数テキストでテスト
-        print("\n複数テキストのベクトル生成テスト:")
-        vectors = embedder.generate_embeddings(texts)
-        print(f"Shape: {vectors.shape}")
-        print(f"First vector: {vectors[0][:5]}...")
+        assert isinstance(vectors, np.ndarray)
+        assert vectors.shape == (3, 512)
 
-    except Exception as e:
-        print(f"Error: {e}")
-
-if __name__ == "__main__":
-    main() 
+    def test_dimension(self, embedder):
+        """次元数"""
+        assert embedder.dimension == 512
