@@ -50,13 +50,15 @@ total=$(du -ch embeddings/*.db embeddings/*.index embeddings/*.json 2>/dev/null 
 echo ""
 echo "合計: $total"
 
-# 確認
-echo ""
-read -p "デプロイを続行しますか？ [y/N] " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "キャンセルしました"
-    exit 0
+# 確認（-yオプションでスキップ可能）
+if [[ "$1" != "-y" ]]; then
+    echo ""
+    read -p "デプロイを続行しますか？ [y/N] " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "キャンセルしました"
+        exit 0
+    fi
 fi
 
 # ディレクトリ作成
@@ -89,7 +91,7 @@ rsync -avz --progress \
 # 検証スクリプト転送・実行
 echo ""
 echo "=== 動作検証 ==="
-ssh "${PI_USER}@${PI_HOST}" "cd ${PI_DIR} && python3 -c \"
+ssh "${PI_USER}@${PI_HOST}" "cd ${PI_DIR} && source venv/bin/activate && python3 -c \"
 import sys
 sys.path.insert(0, '.')
 

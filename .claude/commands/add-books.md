@@ -38,7 +38,11 @@ uv run python src/cli.py search "追加した書籍に含まれるキーワー�
 
 検証が成功したらRaspberry Piへデプロイ:
 ```bash
-PI_HOST=raspberrypi.local PI_USER=kentaro ./scripts/deploy.sh
+# 確認プロンプトあり
+./scripts/deploy.sh
+
+# 自動承認（-yオプション）
+./scripts/deploy.sh -y
 ```
 
 ## 5. デプロイ後の確認

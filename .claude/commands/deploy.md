@@ -4,26 +4,21 @@ description: Raspberry Piへデプロイ
 
 Raspberry Pi 4Bへデプロイしてください。
 
-## 方法1: ネイティブPython（推奨、4GB RAM向け）
+## 設定
+
+`.env`ファイルに設定があります：
+- `PI_HOST=raspberrypi.local`
+- `PI_USER=kentaro`
+- `PI_DIR=/home/kentaro/src/github.com/kentaro/kugutsushi-search`
+
+## デプロイ実行
 
 ```bash
-# Pi側で初回セットアップ
-./scripts/setup_pi.sh
+# 確認プロンプトあり
+./scripts/deploy.sh
 
-# Mac側からデプロイ
-PI_HOST=raspberrypi.local PI_USER=pi ./scripts/deploy.sh
-```
-
-## 方法2: Docker
-
-```bash
-# ビルド + デプロイ
-./scripts/deploy-docker.sh --all
-
-# または個別に
-./scripts/deploy-docker.sh --build      # イメージビルド
-./scripts/deploy-docker.sh --embeddings # embeddingsのみ転送
-./scripts/deploy-docker.sh --deploy     # デプロイのみ
+# 確認プロンプトをスキップ（自動承認）
+./scripts/deploy.sh -y
 ```
 
 ## デプロイ後
@@ -32,19 +27,19 @@ PI_HOST=raspberrypi.local PI_USER=pi ./scripts/deploy.sh
 
 ### 状態確認
 ```bash
-ssh pi@raspberrypi 'systemctl status kugutsushi-search'
+ssh kentaro@raspberrypi.local 'systemctl status kugutsushi-search'
 ```
 
 ### ログ確認
 ```bash
-ssh pi@raspberrypi 'journalctl -u kugutsushi-search -f'
+ssh kentaro@raspberrypi.local 'journalctl -u kugutsushi-search -f'
 ```
 
 ### 手動起動（デバッグ用）
 ```bash
-ssh pi@raspberrypi
+ssh kentaro@raspberrypi.local
 sudo systemctl stop kugutsushi-search
-cd ~/kugutsushi-search
+cd ~/src/github.com/kentaro/kugutsushi-search
 source venv/bin/activate
 uvicorn src.api:app --host 0.0.0.0 --port 8000
 ```
