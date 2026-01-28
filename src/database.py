@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 import logging
 from typing import List, Dict
+import unicodedata
 
 logger = logging.getLogger(__name__)
 
@@ -98,17 +99,45 @@ class Database:
             db_count = cursor.fetchone()[0]
         return db_count + len(self._buffer)
 
+    def _normalize(self, text: str) -> str:
+        """Unicode正規化（NFC形式に統一）"""
+        return unicodedata.normalize('NFC', text)
+
     def get_file_list(self) -> List[str]:
-        """登録されているファイル一覧を取得"""
+        """登録されているファイル一覧を取得（NFC正規化済み）"""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("SELECT DISTINCT file FROM metadata")
-            return [row[0] for row in cursor.fetchall()]
+            return [self._normalize(row[0]) for row in cursor.fetchall()]
 
     def get_metadata_by_file(self, filename: str) -> List[Dict]:
-        """特定ファイルのメタデータをページ順で取得"""
+        """特定ファイルのメタデータをページ順で取得
+
+        ファイル名はNFC/NFD両形式で検索し、Unicode正規化の違いを吸収する
+        """
+        normalized = self._normalize(filename)
         with sqlite3.connect(self.db_path) as conn:
+            # まずNFC正規化した名前で検索
             cursor = conn.execute(
                 "SELECT text, page FROM metadata WHERE file = ? ORDER BY page, id",
-                (filename,)
+                (normalized,)
             )
-            return [{"text": row[0], "page": row[1]} for row in cursor.fetchall()]
+            results = cursor.fetchall()
+
+            # 見つからなければNFD形式でも試す
+            if not results:
+                nfd = unicodedata.normalize('NFD', filename)
+                cursor = conn.execute(
+                    "SELECT text, page FROM metadata WHERE file = ? ORDER BY page, id",
+                    (nfd,)
+                )
+                results = cursor.fetchall()
+
+            # それでも見つからなければ元の形式で試す
+            if not results:
+                cursor = conn.execute(
+                    "SELECT text, page FROM metadata WHERE file = ? ORDER BY page, id",
+                    (filename,)
+                )
+                results = cursor.fetchall()
+
+            return [{"text": row[0], "page": row[1]} for row in results]
