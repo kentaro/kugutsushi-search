@@ -117,6 +117,21 @@ async def books():
         raise HTTPException(500, str(e))
 
 
+@app.get("/books/{filename:path}")
+async def book_content(filename: str):
+    """特定書籍の全チャンクをページ順で取得"""
+    try:
+        chunks = builder.indexer.db.get_metadata_by_file(filename)
+        if not chunks:
+            raise HTTPException(404, f"書籍が見つかりません: {filename}")
+        return {"filename": filename, "total_chunks": len(chunks), "chunks": chunks}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"書籍取得エラー: {e}")
+        raise HTTPException(500, str(e))
+
+
 @app.get("/status")
 async def status():
     """システム状態"""

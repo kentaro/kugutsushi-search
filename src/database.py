@@ -103,3 +103,12 @@ class Database:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute("SELECT DISTINCT file FROM metadata")
             return [row[0] for row in cursor.fetchall()]
+
+    def get_metadata_by_file(self, filename: str) -> List[Dict]:
+        """特定ファイルのメタデータをページ順で取得"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute(
+                "SELECT text, page FROM metadata WHERE file = ? ORDER BY page, id",
+                (filename,)
+            )
+            return [{"text": row[0], "page": row[1]} for row in cursor.fetchall()]
