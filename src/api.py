@@ -106,6 +106,17 @@ async def search(
         raise HTTPException(500, str(e))
 
 
+@app.get("/books")
+async def books():
+    """インデックス済み書籍の一覧"""
+    try:
+        file_list = builder.indexer.db.get_file_list()
+        return {"total": len(file_list), "books": file_list}
+    except Exception as e:
+        logger.error(f"書籍一覧エラー: {e}")
+        raise HTTPException(500, str(e))
+
+
 @app.get("/status")
 async def status():
     """システム状態"""
